@@ -421,6 +421,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         btnInputs = findViewById(R.id.btnInputs);
         View btnSettings = findViewById(R.id.btnSettings);
         btnInputs.setOnClickListener(v -> showInputs());
+        btnInputs.setOnLongClickListener(v -> {
+            openSourcePanel();
+            return true;
+        });
         btnWifi.setOnClickListener(v -> openNetworkPill());
         btnWifi.setOnLongClickListener(v -> {
             open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
@@ -1640,7 +1644,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (!any && tim != null) {
             for (TvInputInfo info : tim.getTvInputList()) {
                 // Inputs hidden in Settings > Inputs are left out of the menu, so they don't count here either.
-                if (info.isPassthroughInput() && !info.isHidden(this)) {
+                if ((info.isPassthroughInput() || info.getType() == TvInputInfo.TYPE_TUNER) && !info.isHidden(this)) {
                     any = true;
                     break;
                 }
@@ -1658,15 +1662,26 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         return getPackageManager().resolveActivity(byAction, 0) != null ? byAction : null;
     }
 
-    /** The TV's own source-selection panel, for TVs that have no TvInputManager (TCL Android TV 9). */
+    /** The TV's own source-selection panel: Sony's InputSelectionActivity, or a configured service for TCL. */
     private void openSourcePanel() {
-        Intent i = new Intent(sourcePanelAction);
-        ComponentName c = ComponentName.unflattenFromString(sourcePanelService);
-        if (c != null) i.setComponent(c);
-        try {
-            startService(i);
-        } catch (Exception e) {
-            Toast.makeText(this, R.string.not_available, Toast.LENGTH_SHORT).show();
+        if ("com.sony.dtv.tvx".equals(liveTvPkg)) {
+            try {
+                Intent i = new Intent().setComponent(new ComponentName("com.sony.dtv.tvx", "com.sony.dtv.tvx.inputselect.InputSelectionActivity"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(i);
+                return;
+            } catch (Exception ignored) {
+            }
+        }
+        if (!sourcePanelAction.isEmpty() || !sourcePanelService.isEmpty()) {
+            Intent i = new Intent(sourcePanelAction);
+            ComponentName c = ComponentName.unflattenFromString(sourcePanelService);
+            if (c != null) i.setComponent(c);
+            try {
+                startService(i);
+            } catch (Exception e) {
+                Toast.makeText(this, R.string.not_available, Toast.LENGTH_SHORT).show();
+            }
         }
     }
 
@@ -1679,13 +1694,30 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
     }
 
-    /** Switches to a passthrough input (HDMI, AV). The standard way is ACTION_VIEW on its channel URI,
-     *  which the Live TV app handles; where nothing takes that, the configured `input_action` is sent
-     *  with the same URI instead (XGIMI's HDMI player only answers com.xgimi.action.hdmiPlayer). */
+    /** Switches to a tuner input (Digital TV, Analog, Satellite). */
+    private void openTunerInput(String inputId) {
+        if ("com.sony.dtv.tvx".equals(liveTvPkg)) {
+            try {
+                Intent act = new Intent(Intent.ACTION_VIEW)
+                        .setComponent(new ComponentName("com.sony.dtv.tvx", "com.sony.dtv.tvx.tvplayer.main.TvxLauncherActivity"))
+                        .setData(Uri.parse("content://android.media.tv/channel?input=" + Uri.encode(inputId) + "&browsable_only=false"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(act);
+                return;
+            } catch (Exception ignored) {
+            }
+        }
+        Intent liveTv = new Intent(Intent.ACTION_VIEW)
+                .setDataAndType(TvContract.buildChannelUriForPassthroughInput(inputId), "vnd.android.cursor.item/channel")
+                .setPackage(liveTvPkg);
+        open(liveTv);
+    }
+
+    /** Switches to a passthrough input (HDMI, AV). */
     private void openInput(String inputId) {
         Uri uri = TvContract.buildChannelUriForPassthroughInput(inputId);
         Intent view = new Intent(Intent.ACTION_VIEW).setDataAndType(uri, "vnd.android.cursor.item/channel")
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         try {
             startActivity(view);
             return;
@@ -1698,7 +1730,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         open(new Intent(inputAction).setDataAndType(uri, "vnd.android.cursor.item/channel"));
     }
 
-    /** Dropdown menu under the Inputs pill: HDMI ports (with connection state), AV and Live TV. */
+    private int inputRank(TvInputInfo info) {
+        String id = info.getId();
+        if (id.contains("DvbRegionAnalog")) return 1;
+        if (id.contains("DvbTerrCable")) return 2;
+        if (id.contains("DvbGenSat")) return 3;
+        if (id.contains("DvbPrefSat")) return 4;
+        if (id.contains("DvbOpv1")) return 5;
+        if (info.getType() == TvInputInfo.TYPE_TUNER) return 6;
+        if (info.getType() == TvInputInfo.TYPE_HDMI) return 10;
+        return 20;
+    }
+
+    /** Dropdown menu under the Inputs pill: TV tuners, HDMI ports (with connection state), AV. */
     private void showInputs() {
         View anchor = findViewById(R.id.btnInputs);
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
@@ -1709,19 +1753,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         final PopupWindow popup = glassPopup(panel, width);
 
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
-        boolean sawNonHdmi = false;
-        String tunerId = null;
-        boolean tunerIsHw = false;
         if (tim != null) {
             List<TvInputInfo> inputs = new ArrayList<>(tim.getTvInputList());
-            // HDMI ports first in port order, then AV and the rest.
             Collections.sort(inputs, (a, b) -> {
-                boolean ha = a.getType() == TvInputInfo.TYPE_HDMI, hb = b.getType() == TvInputInfo.TYPE_HDMI;
-                if (ha != hb) return ha ? -1 : 1;
+                int ra = inputRank(a), rb = inputRank(b);
+                if (ra != rb) return Integer.compare(ra, rb);
                 return String.valueOf(a.loadLabel(this)).compareToIgnoreCase(String.valueOf(b.loadLabel(this)));
             });
-            // Some TVs (Sony) report every HDMI port as connected whether or not anything is plugged in,
-            // so drop the HDMI status then. A TV with every port really in use loses it too.
             int hdmiPorts = 0, hdmiConnected = 0;
             for (TvInputInfo info : inputs) {
                 if (!info.isPassthroughInput() || info.getType() != TvInputInfo.TYPE_HDMI) continue;
@@ -1729,76 +1767,61 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 if (tim.getInputState(info.getId()) == TvInputManager.INPUT_STATE_CONNECTED) hdmiConnected++;
             }
             boolean hdmiStateBogus = hdmiPorts > 1 && hdmiConnected == hdmiPorts;
+            int lastRankGroup = -1;
             for (TvInputInfo info : inputs) {
-                if (info.getType() == TvInputInfo.TYPE_TUNER
-                        && (info.getServiceInfo().applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0) {
-                    // Prefer a hardware tuner: the framework names those ".../HW<n>". System apps such as
-                    // AirPlay also register software inputs of type TUNER and may sort first (seen on TCL G05).
-                    boolean hw = info.getId().matches(".*/HW\\d+$");
-                    if (tunerId == null || (hw && !tunerIsHw) || (hw == tunerIsHw && info.getId().compareTo(tunerId) < 0)) {
-                        tunerId = info.getId();
-                        tunerIsHw = hw;
-                    }
-                }
-                // Inputs hidden in the TV's Settings > Inputs stay out of the menu too.
-                if (!info.isPassthroughInput() || info.isHidden(this)) continue;
+                if (info.isHidden(this)) continue;
+                boolean isTuner = info.getType() == TvInputInfo.TYPE_TUNER;
+                if (!info.isPassthroughInput() && !isTuner) continue;
+                if (isTuner && (info.getServiceInfo().applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) == 0) continue;
+
                 CharSequence l = info.loadLabel(this);
                 String label = l == null ? info.getId() : l.toString();
                 boolean hdmi = info.getType() == TvInputInfo.TYPE_HDMI;
                 if (hdmi && !label.toUpperCase(Locale.ROOT).contains("HDMI")) label = "HDMI " + label;
-                // The name given in Settings > Inputs (e.g. "MacBook Pro") goes first, the port after it.
                 CharSequence custom = info.loadCustomLabel(this);
                 if (custom != null && custom.length() > 0 && !custom.toString().equals(label)) {
                     label = custom + " \u00B7 " + label;
                 }
                 final String id = info.getId();
-                int state = hdmi && hdmiStateBogus ? -1 : tim.getInputState(id);
-                if (!hdmi && rows.getChildCount() > 0 && !sawNonHdmi) addSeparator(rows);
-                if (!hdmi) sawNonHdmi = true;
-                addInputRow(rows, popup, hdmi ? R.drawable.ic_input : R.drawable.ic_av, label, state,
-                        () -> openInput(id));
+                int state = (hdmi && hdmiStateBogus) || isTuner ? -1 : tim.getInputState(id);
+                int rankGroup = isTuner ? 1 : (hdmi ? 2 : 3);
+                if (lastRankGroup != -1 && rankGroup != lastRankGroup && rows.getChildCount() > 0) {
+                    addSeparator(rows);
+                }
+                lastRankGroup = rankGroup;
+                int icon = isTuner ? R.drawable.ic_livetv : (hdmi ? R.drawable.ic_input : R.drawable.ic_av);
+                addInputRow(rows, popup, icon, label, state, isTuner ? () -> {
+                    popup.dismiss();
+                    openTunerInput(id);
+                } : () -> {
+                    popup.dismiss();
+                    openInput(id);
+                });
             }
         }
-        // Nothing to list where there is no TvInputManager: the TV's own source panel switches inputs.
-        if (rows.getChildCount() == 0 && !sourcePanelService.isEmpty()) {
+        if (rows.getChildCount() == 0 && (!sourcePanelService.isEmpty() || "com.sony.dtv.tvx".equals(liveTvPkg))) {
             addInputRow(rows, popup, R.drawable.ic_input, getString(R.string.inputs), -1, this::openSourcePanel);
         }
         if ("com.sony.dtv.tvx".equals(liveTvPkg)) {
             if (rows.getChildCount() > 0) addSeparator(rows);
-            addInputRow(rows, popup, R.drawable.ic_livetv, getString(R.string.live_tv), -1, () -> {
-                try {
-                    Intent act = new Intent("com.sony.dtv.tvx.intent.action.START_PLAYING_TV")
-                            .setComponent(new ComponentName("com.sony.dtv.tvx", "com.sony.dtv.tvx.MainActivity"))
-                            .setData(TvContract.Channels.CONTENT_URI)
-                            .putExtra("com.sony.dtv.intent.extra.KEY_CODE", KeyEvent.KEYCODE_TV)
-                            .putExtra("com.sony.dtv.tvx.tvplayer.extra.LAUNCH_TRIGGER", "TVKey")
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    startActivity(act);
-                    popup.dismiss();
-                } catch (Exception ignored) {
-                }
+            addInputRow(rows, popup, R.drawable.ic_input, getString(R.string.inputs), -1, () -> {
+                popup.dismiss();
+                openSourcePanel();
             });
-        } else {
-            Intent liveTv = liveTvIntent();
-            if (liveTv != null && tunerId != null) {
-                liveTv = new Intent(Intent.ACTION_VIEW)
-                        .setDataAndType(TvContract.buildChannelUriForPassthroughInput(tunerId), "vnd.android.cursor.item/channel")
-                        .setPackage(liveTvPkg);
-            }
-            if (liveTv != null) {
-                if (rows.getChildCount() > 0) addSeparator(rows);
-                final Intent liveTvIntent = liveTv;
-                addInputRow(rows, popup, R.drawable.ic_livetv, getString(R.string.live_tv), -1, () -> open(liveTvIntent));
-            }
         }
         if (rows.getChildCount() == 0) {
             Toast.makeText(this, R.string.no_inputs, Toast.LENGTH_SHORT).show();
             return;
         }
 
-        // Fit the widest row: TVs that report a status on every port (Sony) would otherwise squeeze the names out.
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        int[] at = new int[2];
+        anchor.getLocationInWindow(at);
+        int room = root.getHeight() - (at[1] + anchor.getHeight()) - (int) (34 * density);
         popup.setWidth(Math.max(width, Math.min(panel.getMeasuredWidth(), (int) (360 * density))));
+        if (panel.getMeasuredHeight() > room) {
+            popup.setHeight(Math.max(room, (int) (120 * density)));
+        }
 
         int alignment = getResources().getBoolean(R.bool.rtl_menu_bar) ? Gravity.END : Gravity.START;
         dropIn(popup, panel, anchor, alignment);
