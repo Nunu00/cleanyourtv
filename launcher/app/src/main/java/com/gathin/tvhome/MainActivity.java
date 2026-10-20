@@ -1767,9 +1767,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (rows.getChildCount() > 0) addSeparator(rows);
             addInputRow(rows, popup, R.drawable.ic_livetv, getString(R.string.live_tv), -1, () -> {
                 try {
-                    Intent tv = new Intent("com.sony.dtv.intent.action.TV")
-                            .setComponent(new android.content.ComponentName("com.sony.dtv.tvx", "com.sony.dtv.tvx.inputselect.InputKeyReceiver"));
-                    sendBroadcast(tv);
+                    Intent act = new Intent("com.sony.dtv.tvx.intent.action.START_PLAYING_TV")
+                            .setComponent(new ComponentName("com.sony.dtv.tvx", "com.sony.dtv.tvx.MainActivity"))
+                            .setData(TvContract.Channels.CONTENT_URI)
+                            .putExtra("com.sony.dtv.intent.extra.KEY_CODE", KeyEvent.KEYCODE_TV)
+                            .putExtra("com.sony.dtv.tvx.tvplayer.extra.LAUNCH_TRIGGER", "TVKey")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(act);
                     popup.dismiss();
                 } catch (Exception ignored) {
                 }

@@ -405,9 +405,13 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private void launch(Entry e) {
         if ("com.sony.dtv.tvx".equals(e.pkg)) {
             try {
-                Intent tv = new Intent("com.sony.dtv.intent.action.TV")
-                        .setComponent(new ComponentName("com.sony.dtv.tvx", "com.sony.dtv.tvx.inputselect.InputKeyReceiver"));
-                ctx.sendBroadcast(tv);
+                Intent act = new Intent("com.sony.dtv.tvx.intent.action.START_PLAYING_TV")
+                        .setComponent(new ComponentName("com.sony.dtv.tvx", "com.sony.dtv.tvx.MainActivity"))
+                        .setData(android.media.tv.TvContract.Channels.CONTENT_URI)
+                        .putExtra("com.sony.dtv.intent.extra.KEY_CODE", android.view.KeyEvent.KEYCODE_TV)
+                        .putExtra("com.sony.dtv.tvx.tvplayer.extra.LAUNCH_TRIGGER", "TVKey")
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                ctx.startActivity(act);
                 return;
             } catch (Exception ignored) {
             }
