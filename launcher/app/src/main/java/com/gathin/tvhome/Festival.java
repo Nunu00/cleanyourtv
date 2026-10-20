@@ -43,6 +43,14 @@ final class Festival {
         String end = null;
         if (until != null && !until.trim().isEmpty()) {
             end = until.trim();
+            if (!end.matches("^\\d{4}-\\d{2}-\\d{2}$")) return NONE;
+            try {
+                SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd", Locale.ROOT);
+                sdf.setLenient(false);
+                sdf.parse(end);
+            } catch (Exception e) {
+                return NONE;
+            }
         }
         String g = greeting == null ? "" : Cards.cleanLabel(greeting, "");
         return new Festival(n, end, g, parseColor(accent));
@@ -59,6 +67,10 @@ final class Festival {
 
     boolean active(String today) {
         return !name.isEmpty() && (until == null || today.compareTo(until) <= 0);
+    }
+
+    boolean active(java.time.LocalDate today) {
+        return active(today == null ? "" : today.toString());
     }
 
     /** The greeting to show while active, or "" to keep the normal time-of-day greeting. */
