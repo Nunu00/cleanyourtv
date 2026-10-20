@@ -218,11 +218,11 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         leanbackPackages = tvPackages;
         Set<String> added = LibraryApps.load(ctx);
         Set<String> removed = LibraryApps.loadRemoved(ctx);
-        if (!added.isEmpty()) {
+        if (!added.isEmpty() || !favourites.isEmpty()) {
             Set<String> seen = new HashSet<>(tvPackages);
             for (ResolveInfo ri : pm.queryIntentActivities(
                     new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)) {
-                if (ri.activityInfo != null && added.contains(ri.activityInfo.packageName)
+                if (ri.activityInfo != null && (added.contains(ri.activityInfo.packageName) || favourites.contains(ri.activityInfo.packageName))
                         && seen.add(ri.activityInfo.packageName)) found.add(ri);
             }
         }
@@ -233,16 +233,20 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         // BRAVIA VU31), which would show as two identical tiles: keep the first per package and label.
         Set<String> seen = new HashSet<>();
         for (ResolveInfo ri : found) {
+            if (ri.activityInfo != null && ri.activityInfo.name != null && ri.activityInfo.name.contains("TitleListLauncherActivity")) continue;
             if (ri.activityInfo == null) continue;
             String pkg = ri.activityInfo.packageName;
             if (pkg.equals(ctx.getPackageName()) || !ri.activityInfo.exported
-                    || !LibraryApps.visible(tvPackages.contains(pkg), hidden.contains(pkg), added.contains(pkg), removed.contains(pkg))) continue;
+                    || !LibraryApps.visible(tvPackages.contains(pkg) || favourites.contains(pkg), hidden.contains(pkg), added.contains(pkg), removed.contains(pkg))) continue;
             ComponentName component = new ComponentName(pkg, ri.activityInfo.name);
             Cards.Card card = cardByPkg.get(pkg);
             if (card != null && !card.component.equals(component)) continue;   // the card stands in for this tile
             // Same cleaner as the card prompt: an app label with a bidi override or line separator must not
             // redraw the tile name as something else (#117).
             String label = card != null ? card.label : Cards.cleanLabel(String.valueOf(ri.loadLabel(pm)), pkg);
+            if ("com.sony.dtv.tvx".equals(pkg)) {
+                label = "TV Digitale";
+            }
             if (!seen.add(pkg + '\n' + label)) continue;
             Drawable banner = loadBanner(pm, ri);
             Drawable icon = ri.loadIcon(pm);
@@ -287,6 +291,9 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     private Drawable loadBanner(PackageManager pm, ResolveInfo ri) {
+        if (ri.activityInfo != null && "com.sony.dtv.tvx".equals(ri.activityInfo.packageName)) {
+            return ctx.getDrawable(R.drawable.banner_tv_digitale);
+        }
         int id = ri.activityInfo.banner;
         if (id == 0) id = ri.activityInfo.applicationInfo.banner;
         if (id != 0) {
@@ -396,6 +403,15 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     /** Opens the tile's activity by explicit component, with no extras: a card can name nothing else. */
     private void launch(Entry e) {
+        if ("com.sony.dtv.tvx".equals(e.pkg)) {
+            try {
+                Intent tv = new Intent("com.sony.dtv.intent.action.TV")
+                        .setComponent(new ComponentName("com.sony.dtv.tvx", "com.sony.dtv.tvx.inputselect.InputKeyReceiver"));
+                ctx.sendBroadcast(tv);
+                return;
+            } catch (Exception ignored) {
+            }
+        }
         if (e.kind == Entry.HOME_SETTINGS) {
             ctx.startActivity(new Intent(ctx, HomeSettingsActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));

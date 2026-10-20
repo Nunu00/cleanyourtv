@@ -1,7 +1,7 @@
 package com.gathin.tvhome;
 
-import java.time.LocalDate;
-import java.time.format.DateTimeParseException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.Locale;
 
 /**
@@ -19,14 +19,14 @@ final class Festival {
 
     /** Lower-case festival name, or "" for none. */
     final String name;
-    /** Last day the skin shows, inclusive; null for no end date. */
-    final LocalDate until;
+    /** Last day the skin shows, inclusive, in yyyy-MM-dd; null for no end date. */
+    final String until;
     /** Text that replaces the time-of-day greeting; "" uses the festival's own default. */
     final String greeting;
     /** Focus glow colour as 0xAARRGGBB, or 0 for {@link #DEFAULT_ACCENT}. */
     final int accent;
 
-    private Festival(String name, LocalDate until, String greeting, int accent) {
+    private Festival(String name, String until, String greeting, int accent) {
         this.name = name;
         this.until = until;
         this.greeting = greeting;
@@ -40,21 +40,25 @@ final class Festival {
     static Festival parse(String name, String until, String greeting, String accent) {
         String n = name == null ? "" : name.trim().toLowerCase(Locale.ROOT);
         if (n.isEmpty() || n.length() > 40) return NONE;
-        LocalDate end = null;
+        String end = null;
         if (until != null && !until.trim().isEmpty()) {
-            try {
-                end = LocalDate.parse(until.trim());
-            } catch (DateTimeParseException e) {
-                return NONE;
-            }
+            end = until.trim();
         }
         String g = greeting == null ? "" : Cards.cleanLabel(greeting, "");
         return new Festival(n, end, g, parseColor(accent));
     }
 
+    static String today() {
+        return new SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(new Date());
+    }
+
     /** Whether the skin shows today. */
-    boolean active(LocalDate today) {
-        return !name.isEmpty() && (until == null || !today.isAfter(until));
+    boolean active() {
+        return active(today());
+    }
+
+    boolean active(String today) {
+        return !name.isEmpty() && (until == null || today.compareTo(until) <= 0);
     }
 
     /** The greeting to show while active, or "" to keep the normal time-of-day greeting. */

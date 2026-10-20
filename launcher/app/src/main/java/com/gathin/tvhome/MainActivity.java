@@ -68,7 +68,6 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import java.io.File;
 import java.io.IOException;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
@@ -147,7 +146,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private MarigoldDrawable marigold;
     private int greetingColor;
     /** The day the petal shower last played, so it greets the first Home of each day only. */
-    private static LocalDate lastPetalShower;
+    private static String lastPetalShower;
     /** hidden_apps as the adapter sees them (config.xml or a theme's config.json): a hidden app gets no card either. */
     private Set<String> hiddenApps = Collections.emptySet();
     private List<Cards.Card> cards = Collections.emptyList();
@@ -248,7 +247,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         reducedMotion = cfg.reducedMotion;
         dockRow = cfg.dockRow;
         festival = cfg.festival;
-        festive = festival.active(LocalDate.now());
+        festive = festival.active();
         liveTvPkg = cfg.liveTvPackage;
         liveTvAction = cfg.liveTvAction;
         inputAction = cfg.inputAction;
@@ -564,7 +563,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     protected void onResume() {
         super.onResume();
         // A festival that started or ended while Home was in the background: rebuild with or without it.
-        if (festive != festival.active(LocalDate.now())) {
+        if (festive != festival.active()) {
             recreate();
             return;
         }
@@ -582,7 +581,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         handler.postDelayed(minuteTick, MINUTE_MS);
         if (festive && diya != null) {
             diya.start();
-            LocalDate today = LocalDate.now();
+            String today = Festival.today();
             if (!reducedMotion && !today.equals(lastPetalShower)) {
                 lastPetalShower = today;
                 handler.postDelayed(this::playPetalShower, 450);
@@ -1764,16 +1763,29 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (rows.getChildCount() == 0 && !sourcePanelService.isEmpty()) {
             addInputRow(rows, popup, R.drawable.ic_input, getString(R.string.inputs), -1, this::openSourcePanel);
         }
-        Intent liveTv = liveTvIntent();
-        if (liveTv != null && tunerId != null) {
-            liveTv = new Intent(Intent.ACTION_VIEW)
-                    .setDataAndType(TvContract.buildChannelUriForPassthroughInput(tunerId), "vnd.android.cursor.item/channel")
-                    .setPackage(liveTvPkg);
-        }
-        if (liveTv != null) {
+        if ("com.sony.dtv.tvx".equals(liveTvPkg)) {
             if (rows.getChildCount() > 0) addSeparator(rows);
-            final Intent liveTvIntent = liveTv;
-            addInputRow(rows, popup, R.drawable.ic_livetv, getString(R.string.live_tv), -1, () -> open(liveTvIntent));
+            addInputRow(rows, popup, R.drawable.ic_livetv, getString(R.string.live_tv), -1, () -> {
+                try {
+                    Intent tv = new Intent("com.sony.dtv.intent.action.TV")
+                            .setComponent(new android.content.ComponentName("com.sony.dtv.tvx", "com.sony.dtv.tvx.inputselect.InputKeyReceiver"));
+                    sendBroadcast(tv);
+                    popup.dismiss();
+                } catch (Exception ignored) {
+                }
+            });
+        } else {
+            Intent liveTv = liveTvIntent();
+            if (liveTv != null && tunerId != null) {
+                liveTv = new Intent(Intent.ACTION_VIEW)
+                        .setDataAndType(TvContract.buildChannelUriForPassthroughInput(tunerId), "vnd.android.cursor.item/channel")
+                        .setPackage(liveTvPkg);
+            }
+            if (liveTv != null) {
+                if (rows.getChildCount() > 0) addSeparator(rows);
+                final Intent liveTvIntent = liveTv;
+                addInputRow(rows, popup, R.drawable.ic_livetv, getString(R.string.live_tv), -1, () -> open(liveTvIntent));
+            }
         }
         if (rows.getChildCount() == 0) {
             Toast.makeText(this, R.string.no_inputs, Toast.LENGTH_SHORT).show();
